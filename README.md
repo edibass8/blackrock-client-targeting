@@ -64,14 +64,21 @@ The Random Forest classifier was selected as the best performer. It uses demogra
 ## Repository Structure
 
 ```
-├── analysis.Rmd                        # Main R Markdown analysis
+├── Week_1.Rmd                          # Initial EDA and first model
+├── Week_2.Rmd                          # Refined modeling with new data
+├── Week_6_prediction.Rmd               # Week 6 predictions
+├── Week_7_calibrated_models.Rmd        # Final calibrated models
 ├── report/
-│   └── Predictive_Analytics.pdf        # Final project report
+│   └── Predictive Analytics.docx.pdf   # Final project report
 ├── data/
 │   ├── period_0.csv                    # Historical training dataset
 │   ├── period_1_prediction.csv         # Weekly client lead files
 │   ├── period_2_prediction.csv
-│   └── ...
+│   ├── period_3_prediction.csv
+│   ├── period_4_prediction.csv
+│   ├── period_5_prediction.csv
+│   ├── predicted_6_investment.csv      # Model predictions — Week 6
+│   └── predicted_7_investment.csv      # Model predictions — Week 7
 └── README.md
 ```
 
@@ -84,9 +91,10 @@ The Random Forest classifier was selected as the best performer. It uses demogra
 ## How to Run
 
 1. Clone this repository
-2. Open `analysis.Rmd` in RStudio
+2. Open any of the `.Rmd` files in RStudio
 3. Ensure required packages are installed
-4. Knit the R Markdown file or run chunks interactively
+4. Knit the R Markdown files or run chunks interactively
+5. Start with `Week_1.Rmd` for the initial analysis, then follow the weekly progression
 
 ## License
 
