@@ -1,0 +1,345 @@
+---
+title: "Period_1_Prediction"
+author: "Group C"
+date: "`r format(Sys.time())`"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    latex_engine: xelatex
+editor_options:
+  chunk_output_type: console
+---
+
+## Preamble
+
+Loading the libraries and datasets to be analyzed.
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+# clean the environment
+rm(list=ls())
+```
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+#load libraries
+library(tidyverse)
+library(ggplot2)
+library(skimr)
+library(recipes)
+library(themis)
+library(stargazer) 
+library(ggthemes) 
+library(GGally) 
+library(skimr) 
+library(corrr)
+library(knitr)
+
+```
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+# Load the data
+tb.hist <- read.csv("/Users/edet/Downloads/Final/period_0.csv")
+
+tb.curr <-read.csv("/Users/edet/Downloads/Final/period_1_prediction.csv")
+```
+
+#Data Exploration
+
+```{r,message=FALSE,warning=FALSE, results='hide' }
+#Data Exploration
+summary(tb.hist)
+glimpse(tb.hist)
+skim(tb.hist)
+```
+
+<li>⁠Variables with missing data are job, education, preffered_contact, marketing_potential</li>
+
+.
+
+<li>⁠In the Historical Dataset - Rows = 7550, Columns = 14. Out of which 7 are Numeric and 7 are character type and no Group variables and Factors.</li>
+
+<li>⁠In the Historical dataset, there are not too many categories. So we do not need to aggregate the categories.</li>
+
+<li>⁠We can see there are 11 unique jobs that the clients work.</li>
+
+<li>More than half of the clients are married and majority of the clients work blue collar jobs.</li>
+
+<li>⁠Most clients are in the age group 25 to 60 and they invest the most money.</li>
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+# Scatter plot for age vs. investment
+ggplot(tb.hist, aes(x = age, y = investment)) +
+  geom_point() +
+  labs(x = "Age", y = "Investment") +
+  ggtitle("Scatter plot of Age vs. Investment")
+```
+
+<li>We decided to make a scattrplot of Age vs Investment to understand the preious prediction (period_0). The reason for oding this is to understand or see the ages of people who have made investments and also see if there is any outliers.</li>
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+# Scatter plot for age vs. investment faceted by Job
+
+ggplot(tb.hist, aes(x = age, y = investment)) +
+  geom_point() +
+  facet_wrap(~ job) +
+  labs(x = "Age", y = "Investment") +
+  ggtitle("Scatter plot of Age vs. Investment, faceted by Job")
+
+```
+
+<li>More information can be gotten from a faceted version of this plot (we used faceted here because it categorized the different types of job(facet_wrap)) by the age and investment made</li>
+
+The interesting notes from this plot include;
+
+<li>Those with missing jobs, clearly might not a job at all as they mostly do not tend to invest. Therefore, they can be ignored in the search of those willing to invest.</li>
+
+<li>The entrepreneurs do not invest well generally. None of them has invested up to €1000.</li>
+
+<li>Those with the following jobs tend to invest most often and well - `management`,`blue_collar`, `technician`, `admin`</li>
+
+<li>It is surprising to see some `retired` in their 20s and even below 50. It might take some difficulty to explain the reason. It should be noted that none of these guys have invested so they can also be ignored in the search of potential investors</li>
+
+<li>Those with jobs - `student`, `services` and `self_employed` all tend to invest but not really largely especially the students</li>
+
+### Similarly we can investigate for the Number of Previous Marketing Contacts against the Investment
+
+```{r}
+
+ggplot(tb.hist, aes(x = n_marketing_contacts, y = investment)) +
+  geom_point() +
+  facet_wrap(~ job) +
+  labs(x = "Number of Previous Marketing Contacts", y = "Investment") +
+  ggtitle("Scatter plot of Number of Previous Marketing Contacts vs. Investment, faceted by Job")
+
+```
+
+The interesting notes from this plot include;
+
+<li>At first glance, there is a perception of lower number of previous marketing contacts equals more investment.</li>
+
+<li>Asides from the `management`,`retired` and `technician`, there are only very few who invested at least €1000 who had more than a value of 10 in `n_marketing_contacts`.</li>
+
+<li>All `blue_collar` clients who have more than 10 in `n_marketing_contacts` did not give so they can also be neglected henceforth.</li>
+
+```{r,message=FALSE,warning=FALSE, results='hide}
+
+ggplot(tb.hist, aes(x = balance, y = investment)) +
+  geom_point() +
+  facet_wrap(~ job) +
+  labs(x = "Balance", y = "Investment") +
+  ggtitle("Scatter plot of Balance vs. Investment, faceted by Job")
+
+```
+
+There is a clear trend in this plot. We mostly have three (3) linear lines across each job. One of the lines is always with a slope of 0, while the remaining two have different slopes per job.
+
+This strongly suggest that a linear model might be useful in capturing these relevant information for prediction.
+
+```{r, message=FALSE,warning=FALSE, results='hide'}
+mean_investment_per_potential <- tb.hist %>%
+  group_by(marketing_potential) %>%
+  summarize(mean_investment_per_potential = mean(investment, na.rm = TRUE))
+
+ggplot(mean_investment_per_potential, aes(x = marketing_potential, y = mean_investment_per_potential)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Marketing Potential", y = "Mean Investment") +
+  ggtitle("Mean Investment for Each Marketing Potential") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+There is a clear information here that the clients with "high" `marketing_potential` are good investors and can be considered priority in choosing Potential Investors
+
+```{r}
+
+high_marketing_potential <- tb.hist %>%
+  filter(marketing_potential == "high")
+
+# Getting the total investment for these clients
+total_investment_high <- sum(high_marketing_potential$investment, na.rm = TRUE)
+
+# Getting the total investment for all clients
+total_investment_overall<- sum(tb.hist$investment, na.rm = TRUE)*100
+
+# Percentage of total investment by high potential clients
+investment_perc_by_high_marketing <- total_investment_high/sum(tb.hist$investment, na.rm = TRUE)*100
+
+# Percentage of slots filled by including all high potential clients
+slot_perc_by_high_marketing <- nrow(high_marketing_potential)/1000*100
+
+c(investment_perc_by_high_marketing,slot_perc_by_high_marketing)
+
+```
+
+If we select all the high `marketing_potential` clients, I would have \~19% of the total investment This would take 25.5% of the 1000 allocated space to be called.
+
+I can take this reasonable loss for now.
+
+## I will make above proposed actions
+
+```{r}
+
+tb.hist2 <- tb.hist %>%
+  filter(!is.na(job)) %>%
+  filter((job != "retired") | ((job=="retired")&(age>50))) %>%
+  filter((job != "blue_collar ")|((job == "blue_collar ")&(n_marketing_contacts <= 10)))%>%
+  filter(is.na(marketing_potential) | marketing_potential == "low")
+
+  
+  
+tb.hist2$missing_count <- rowSums(is.na(tb.hist2))
+
+investment_means <- tb.hist2 %>%
+  group_by(missing_count) %>%
+  summarize(mean_investment = mean(investment, na.rm = TRUE))
+
+ggplot(investment_means, aes(x = factor(missing_count), y = mean_investment)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Count of Missing Values", y = "Mean Investment") +
+  ggtitle("Mean Investment for Each Count of Missing Values") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+We can discard every row with 3 missing values since such do not have any investments.
+
+```{r}
+
+mean_investment_by_marital <- tb.hist2 %>%
+  group_by(preferred_contact) %>%
+  summarize(mean_investment_by_marital = mean(investment, na.rm = TRUE))
+
+ggplot(mean_investment_by_marital, aes(x = preferred_contact, y = mean_investment_by_marital)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Marketing Potential", y = "Mean Investment") +
+  ggtitle("Mean Investment for Each Marketing Potential") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+# Frequency table
+
+tb.hist2 %>%
+  group_by(preferred_contact) %>%
+  count()
+
+```
+
+Now investigating the loan columns
+
+```{r}
+
+## Personal Loan
+mean_investment_loan_personal <- tb.hist2 %>%
+  group_by(loan_personal) %>%
+  summarize(mean_investment = mean(investment, na.rm = TRUE))
+
+ggplot(mean_investment_loan_personal, aes(x = loan_personal, y = mean_investment)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Loan Personal", y = "Mean Investment") +
+  ggtitle("Mean Investment by Loan Personal")
+
+
+## House Loan
+mean_investment_loan_house <- tb.hist2 %>%
+  group_by(loan_house) %>%
+  summarize(mean_investment = mean(investment, na.rm = TRUE))
+
+ggplot(mean_investment_loan_house, aes(x = loan_house, y = mean_investment)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Loan House", y = "Mean Investment") +
+  ggtitle("Mean Investment by Loan House")
+
+
+## Combined Loan
+tb.hist2$loan_combined <- paste(tb.hist2$loan_personal, tb.hist2$loan_house, sep = "_")
+
+mean_investment_loan_combined <- tb.hist2 %>%
+  group_by(loan_combined) %>%
+  summarize(mean_investment = mean(investment, na.rm = TRUE))
+
+ggplot(mean_investment_loan_combined, aes(x = loan_combined, y = mean_investment)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Loan House", y = "Mean Investment") +
+  ggtitle("Mean Investment by Loan Combined")
+
+```
+
+It is clear that no's are the more favourable answers
+
+Now checking the top 500 clients and comparing with all responses
+
+```{r}
+sorted_tb_hist2 <- tb.hist2 %>%
+  arrange(desc(investment))
+
+# Take the first 500 rows
+top_500 <- head(sorted_tb_hist2, 500)
+
+# The frequency tables
+frequency_table_sample <- table(top_500$loan_combined)
+frequency_table_full <- table(tb.hist2$loan_combined)
+
+round(frequency_table_sample/frequency_table_full*100,2)
+
+
+sample2 <- tb.hist2 %>%
+  filter(loan_combined=="no_no") %>%
+  sample_n(size = 600, replace = FALSE)
+mean(sample2$investment)
+
+sample3 <- tb.hist2 %>%
+  filter(loan_combined=="no_yes") %>%
+  filter(missing_count!=2)%>%
+  filter(job %in% c('management','retired', 'technician'))%>%
+  sample_n(size = 1000-600-255, replace = FALSE)
+mean(sample3$investment)
+```
+
+# Now making the predictions
+
+```{r}
+high_marketing_potential_idx <- tb.curr %>%
+  filter(marketing_potential == 'high')
+sample1_idx <- high_marketing_potential_idx$id
+
+tb.curr2 <- tb.curr %>%
+  filter(!is.na(job)) %>%
+  filter((job != "retired") | ((job=="retired")&(age>50))) %>%
+  filter((job != "blue_collar ")|((job == "blue_collar ")&(n_marketing_contacts <= 10)))%>%
+  filter(is.na(marketing_potential) | marketing_potential == "low")
+
+tb.curr2$missing_count <- rowSums(is.na(tb.curr2))
+tb.curr2$loan_combined <- paste(tb.curr2$loan_personal, tb.curr2$loan_house, sep = "_")
+
+sample2 <- tb.curr2 %>%
+  filter(loan_combined=="no_no") %>%
+  sample_n(size = 600, replace = FALSE)
+sample2_idx <- sample2$id
+
+sample3 <- tb.curr2 %>%
+  filter(loan_combined=="no_yes") %>%
+  sample_n(size = 1000-600-length(sample1_idx), replace = FALSE)
+sample3_idx <- sample3$id
+
+
+# Combining the samples indices
+samples_idx <- c(sample1_idx,sample2_idx,sample3_idx)
+
+# Creating the table in the expected format
+predictions <- data.frame(
+  id = tb.curr$id,
+  target = rep(0, nrow(tb.curr))
+)
+predictions$target[predictions$id %in% samples_idx] <- 1
+
+
+# Saving to file
+save_path <- "predictions1.csv"
+write.csv(predictions, file = save_path, row.names = FALSE)
+```
+
+<li>
+
+The logic behind our prediction is that it identifies individuals with high marketing potential by examining employment status, age, past marketing interactions, and loan status. It filters out certain job categories unless they meet specific conditions, like age criteria for retirees or contact limits for blue-collar workers, aiming to narrow down to those most likely to be receptive to marketing. Additionally, creates detailed groups based on personal and housing loan statuses, selecting them for targeted marketing actions. It picks out these people because they fit the exact profile the company is interested in, such as having the right job or being the right age. This way, the company knows exactly who they should focus their marketing on
+
+<li>

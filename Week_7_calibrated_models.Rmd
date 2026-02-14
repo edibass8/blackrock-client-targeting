@@ -1,0 +1,599 @@
+---
+title: "Week_7_calibrated_models"
+author: "Joe Raymond Justione"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls()) 
+library(discrim)
+library(probably)
+library(tidymodels); tidymodels_prefer()
+library(themis)
+library(finetune)
+library(vip)
+library(ggthemes)
+library(doParallel)
+theme_set(theme_bw())
+library(tidyverse)
+
+```
+
+```{r}
+set.seed(1996)
+
+
+# Define file paths
+histfile_0 <- 'period_0.csv'
+histfile_1_data <- 'period_1_prediction.csv'
+histfile_1_res <- 'results-2024-02-17.csv'
+histfile_2_data <- 'period_2_prediction.csv'
+histfile_2_res <- 'week_2_group_8.csv' 
+histfile_3_data <- 'period_3_prediction.csv'
+histfile_3_res <-  'week_3_group_2.csv'
+histfile_4_data <- 'period_4_prediction.csv'
+histfile_4_res <- 'week_4_group_2.csv'
+currfile <- 'period_5_prediction.csv'
+
+# Load the data
+tb.hist_0 <- read_csv("/Users/edet/Downloads/Final/period_0.csv",show_col_types = FALSE)
+
+tb.hist_1_data <- read_csv("/Users/edet/Downloads/Final/period_1_prediction.csv",show_col_types = FALSE)
+
+tb.hist_1_res <- read_delim("/Users/edet/Downloads/Final/results-2024-02-17.csv", delim = ";",
+                            show_col_types = FALSE)
+
+tb.hist_2_data <- read_csv("/Users/edet/Downloads/Final/period_2_prediction.csv",show_col_types = FALSE)
+
+tb.hist_2_res <- read_delim("/Users/edet/Downloads/Final/week_2_group_8.csv", delim = ";",show_col_types = FALSE)
+
+tb.hist_3_data <- read_csv('/Users/edet/Downloads/Final/period_3_prediction.csv',
+                           show_col_types = FALSE)
+
+tb.hist_3_res <- read_delim("/Users/edet/Downloads/Final/week_3_group_2.csv", delim = ";", 
+                            show_col_types = FALSE)
+
+tb.hist_4_data <- read_csv('/Users/edet/Downloads/Final/period_4_prediction.csv', 
+                           show_col_types = FALSE)
+
+tb.hist_4_res <- read_delim('/Users/edet/Downloads/Final/week_4_group_2.csv', delim = ";", 
+                            show_col_types = FALSE)  
+
+
+
+tb.curr <- read_csv("/Users/edet/Downloads/Final/period_5_prediction.csv",show_col_types = FALSE)
+```
+
+```{r}
+# Merge historical data with results data
+tb.hist_1 <- tb.hist_1_data %>%
+  left_join(tb.hist_1_res, by = "id") %>%
+  mutate(
+    investment = ifelse(is.na(investment), 0, investment),
+    week_id = ifelse(is.na(week_id), 1, week_id))
+
+tb.hist_2 <- tb.hist_2_data %>% 
+  left_join(tb.hist_2_res, by = "id") %>%
+  mutate(
+    investment = ifelse(is.na(investment), 0, investment),
+    week_id = ifelse(is.na(week_id), 2, week_id))
+
+tb.hist_3 <- tb.hist_3_data %>% 
+  left_join(tb.hist_3_res, by = "id") %>%
+  mutate(
+    investment = ifelse(is.na(investment), 0, investment),
+    week_id = ifelse(is.na(week_id), 2, week_id))
+
+tb.hist_4 <- tb.hist_4_data %>% 
+  left_join(tb.hist_4_res, by = "id") %>%
+  mutate(
+    investment = ifelse(is.na(investment), 0, investment),
+    week_id = ifelse(is.na(week_id), 2, week_id))
+  
+
+
+# Combine historical data from periods 0, 1, 2 and 3.
+tb.hist <- tb.hist_0 %>% 
+  select(-call_length) %>%
+  bind_rows(tb.hist_1,tb.hist_2,tb.hist_3,tb.hist_4 %>% select(-week_id))
+
+#Removing week_id from the historical dataset.
+tb.hist_final_week7 <- tb.hist %>% select(-week_id)
+```
+
+```{r}
+# Create categorical variables for age group and marital status with job
+tb.hist_final_week7[["age_group"]] <- cut(tb.hist_final_week7$age, c(0, 35, 45, 65, Inf), 
+                               c("young", "junior", "adult", "senior"), include.lowest=TRUE)
+tb.hist_final_week7[["age_group_job"]] <- paste(tb.hist_final_week7$age_group, tb.hist_final_week7$job)
+tb.hist_final_week7[["marital_job"]] <- paste(tb.hist_final_week7$marital, tb.hist_final_week7$job)
+
+
+```
+
+```{r}
+set.seed(1996)
+data_split <- tb.hist_final_week7 %>%
+  mutate( 
+    investment = ifelse(investment == 0, 'no', 'yes'),
+    investment = factor(investment, levels = c('yes', 'no'))
+  ) %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  select(-age_group) %>%
+  initial_split(data = ., prop = 0.8, strata = investment)
+
+# Creating the training and testing splits
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+# CROSS VALIDATION data split
+train_folds <- vfold_cv(data = train_data, v = 10,
+                        repeats = 1,strata = investment)
+
+```
+
+#Creating the recepie for the models.
+```{r}
+# Define data preparation recipe
+data_prep_recipe_downsample <- recipe(investment ~ ., data = train_data) %>%
+  step_rm(id) %>%
+  step_other(age_group_job, marital_job, threshold = .1, other = "other") %>%
+  step_impute_median(all_numeric(), -all_outcomes()) %>%
+  step_unknown(all_nominal(), -all_outcomes(), new_level = "missing") %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_downsample(investment, skip = TRUE, seed = 1996) %>%
+  step_nzv(all_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_scale(all_numeric())
+
+```
+
+```{r}
+#-- prepare grids for stack models 
+ctrl_grid <- control_grid(save_pred = TRUE, save_workflow = TRUE, verbose = T)
+ctrl_res  <- control_resamples(save_pred = TRUE, save_workflow = TRUE, verbose = T)
+```
+
+#Candidate Setup
+```{r}
+class_rec <- data_prep_recipe_downsample
+boost_mod <- boost_tree(trees = tune(), learn_rate = tune(), mtry = tune(), tree_depth = tune()) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification") 
+
+forest_mod <-  rand_forest(  mtry = tune(), trees = tune()) %>% 
+  set_engine("ranger") %>%
+  set_mode("classification")
+
+
+wf_race<- 
+  workflow_set(
+    preproc = list(
+      undersamp = class_rec
+    ), 
+    models = list( 
+      bt_xgboost  = boost_mod 
+      , rf_ranger = forest_mod
+    )
+  )
+```
+
+
+```{r}
+race_ctrl    <- control_race(
+  save_pred = TRUE
+  , parallel_over = "resamples"
+  , save_workflow = TRUE
+  , verbose = TRUE)
+```
+
+
+```{r, include=FALSE}
+race_results <- wf_race %>% workflow_map( 
+  fn   = "tune_race_anova"
+  , seed = 1503
+  , resamples = train_folds
+  , metrics   = metric_set(roc_auc)
+  , grid      = 5  
+  , control   = race_ctrl)
+race_results
+```
+
+
+```{r}
+overall_best_id <- race_results %>% 
+  rank_results(rank_metric = 'roc_auc') %>% 
+  filter(.metric == 'roc_auc') %>% head(n=1) %>% 
+  select(wflow_id) %>% as.character
+overall_best_id
+```
+
+```{r}
+race_best_results <- race_results %>% 
+  extract_workflow_set_result(id=overall_best_id) %>% 
+  select_best(metric = 'roc_auc')
+race_best_results
+```
+
+```{r}
+best_model_final <- race_results %>% 
+  extract_workflow(overall_best_id) %>% 
+  finalize_workflow(race_best_results) %>%
+  fit(train_data)
+best_model_final
+```
+
+```{r}
+predicted_scores <- best_model_final %>%
+  predict(train_data, type = "prob") %>%
+  bind_cols(investment = train_data$investment)
+predicted_scores
+```
+
+```{r}
+random_res <- race_results %>% 
+  extract_workflow(overall_best_id) %>% 
+  finalize_workflow(race_best_results) %>% 
+  last_fit(
+    split = data_split
+    , metrics = metric_set(
+      yardstick::roc_auc
+      , yardstick::accuracy
+      , yardstick::sens
+      , yardstick::spec
+      , yardstick::precision))
+collect_metrics(random_res)
+
+
+random_res %>% 
+  collect_predictions() %>%
+  dplyr::select(.pred_class,investment) %>%
+  table
+
+random_res %>% 
+  collect_predictions() %>%
+  mutate(pred_class = ifelse(.pred_yes > 0.9,'1-yes','2-no')) %>%
+  dplyr::select(pred_class,investment) %>%
+  table
+
+random_res %>% 
+  collect_predictions() %>%
+  dplyr::select(investment, .pred_yes) %>%
+  roc_curve(investment, .pred_yes) %>% 
+  autoplot()
+
+random_res %>% 
+  collect_predictions() %>%
+  dplyr::select(investment, .pred_yes) %>%
+  gain_curve(investment, .pred_yes) %>% 
+  autoplot()
+
+random_res %>% 
+  collect_predictions() %>%
+  dplyr::select(investment, .pred_yes) %>%
+  lift_curve(investment, .pred_yes) %>% 
+  autoplot()
+
+```
+
+#Calibrate Model Setup
+```{r}
+glm_mod <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification") 
+
+
+calibration_data   <- collect_predictions(random_res) %>% select(investment, .pred_yes)
+
+calibration_fit    <- glm_mod %>% 
+  fit( investment ~ .pred_yes, data = calibration_data)
+
+calibrated_probs <- predict(calibration_fit,
+                            new_data = calibration_data, type = 'prob')
+
+bind_cols(
+  predict(best_model_final, new_data=test_data, type = 'prob') %>% 
+    select(model_score = .pred_yes)
+  , predict(best_model_final, new_data=test_data, type = 'prob') %>% 
+    predict(calibration_fit, new_data = ., type = 'prob') %>%
+    select(calibrated_prob = .pred_yes) %>% 
+    bind_cols( investment = test_data$investment )
+) %>% arrange(-calibrated_prob)
+
+predict(best_model_final, new_data=test_data, type = 'prob') %>%
+  predict(calibration_fit, new_data = ., type = 'prob') %>%
+  select(.pred_yes) %>% bind_cols( investment = test_data$investment ) %>%
+  caret::calibration( investment ~ .pred_yes, data = ., cuts = 10) %>%
+  ggplot(.) +  ylim(0,100) 
+```
+#Getting probabilities from scores
+```{r}
+#scores from boosted trees
+scores <- predict(best_model_final, new_data = test_data, type = 'prob')
+scores
+
+#probabilities from boosted trees
+probs <- predict(best_model_final, new_data = test_data, type = 'prob') %>% 
+  predict(calibration_fit, new_data = ., type = 'prob') %>% 
+  arrange(-.pred_yes)
+probs
+
+compare <- bind_cols(rename(scores, scr_yes = .pred_yes, scr_no = .pred_no),
+                     rename(probs, prb_yes = .pred_yes, prb_no = .pred_no))
+compare
+```
+#Calibration exercise using tidymodels probably
+```{r}
+collect_predictions(random_res) %>%
+  ggplot(aes(.pred_yes)) +
+  geom_histogram(col = "white", bins = 40) +
+  facet_wrap(~ investment, ncol = 1) +
+  geom_rug(col = "blue", alpha = 1 / 2) + 
+  labs(x = "Estimate")
+```
+
+```{r}
+#break the predictions into about ten equally sized buckets and
+#compute the actual event rate within each
+cal_plot_breaks(random_res)
+
+# similar function that can use moving windows with overlapping partitions
+cal_plot_windowed(random_res, step_size = 0.025)
+
+#  for two class outcomes, we can fit a logistic generalized additive model (GAM)
+# and examine the trend.
+cal_plot_logistic(random_res)
+
+logit_cal <- cal_estimate_logistic(random_res, investment, dplyr::starts_with(".pred_"))
+
+predicted_scores
+```
+
+```{r}
+test_cal_pred <-
+  predicted_scores %>%
+  cal_apply(logit_cal)
+test_cal_pred
+
+test_cal_pred %>% dplyr::select(investment, starts_with(".pred_"))
+
+compare_tidy <- bind_cols(
+  rename(predicted_scores, scr_yes = .pred_yes, scr_no = .pred_no, truth = investment),
+  rename(test_cal_pred, prb_yes = .pred_yes, prb_no = .pred_no) ) %>%
+  select(-investment)
+compare_tidy
+```
+
+```{r}
+compare_tidy %>%
+  caret::calibration( truth ~ prb_yes, data = ., cuts = 10) %>%
+  ggplot(.) +  ylim(0,100) 
+```
+#Create a model for deployment
+```{r}
+model_deploy <- race_results %>% 
+  extract_workflow(overall_best_id) %>% 
+  finalize_workflow(race_best_results) %>% 
+  fit(data = train_data)
+```
+
+
+#use the model on the prediction period.
+We follow the same step to prep data as we did for the data split.
+```{r}
+# Create categorical variables for age group and marital status with job
+tb.curr[["age_group"]] <- cut(tb.curr$age, c(0, 35, 45, 65, Inf), 
+                               c("young", "junior", "adult", "senior"), include.lowest=TRUE)
+tb.curr[["age_group_job"]] <- paste(tb.curr$age_group, tb.curr$job)
+tb.curr[["marital_job"]] <- paste(tb.curr$marital, tb.curr$job)
+
+  tb.curr %>% 
+  select(-age_group)
+
+    curr_pred_class <- predict(model_deploy, new_data = tb.curr , type = 'class')
+    curr_pred_prob <- predict(model_deploy, new_data = tb.curr , type = 'prob')
+
+    
+  tb.overtime <- 
+  tb.hist_final_week7 %>% 
+  mutate(investment = factor(ifelse(investment == 0,'no','yes'), levels = c('yes','no'))) %>% 
+  select(investment,period) %>%
+  bind_cols(
+      predict(model_deploy, new_data = tb.hist_final_week7, type = 'class')
+    , predict(model_deploy, new_data = tb.hist_final_week7, type = 'prob'))
+  
+    
+tb.overtime %>% group_by(period) %>% 
+  group_map(~ cbind(time = .y, roc_auc(.x, investment, .pred_yes))) %>%
+  bind_rows %>% ggplot(., aes( x = period, y = .estimate)) + 
+  geom_line() + geom_point() + expand_limits(y = 0) + 
+  labs( x = 'Time period', y = 'AUC in testdata') + theme_bw()
+
+tb.overtime %>%
+  mutate( .estimate = factor(ifelse(.pred_yes > 0.5, 'yes','no'), levels = c('yes','no'))) %>% 
+  group_by(period) %>% 
+  group_map(~ cbind(time = .y, precision(.x, truth = investment, estimate = .estimate))) %>%
+  bind_rows %>% ggplot(., aes( x = period, y = .estimate * 100 )) + geom_line() + geom_point() + expand_limits(y = 0) + 
+  labs( x = 'Time period', y = 'Precision in the test data (percent)') + theme_bw()
+
+tb.overtime %>% 
+  mutate( .estimate = factor(ifelse(.pred_yes > 0.5, 'yes','no'), levels = c('yes','no'))) %>% 
+  group_by(period) %>% 
+  group_map(~ cbind(time = .y, sens(.x, truth = investment, estimate = .estimate))) %>%
+  bind_rows %>% ggplot(., aes( x = period, y = .estimate * 100 )) + geom_line() + geom_point() + expand_limits(y = 0) + 
+  labs( x = 'Time period', y = 'Sensitiviy (or Recall) in the test data (percent)') + theme_bw()
+
+```
+
+```{r}
+# Create predictions dataframe
+predictions_week_7 <-  data.frame(
+    id = tb.curr$id,
+    target = ifelse(curr_pred_class == "yes", 1, 0))
+predictions_week_7
+
+# Save predictions to files
+#save_path <- "/Users/joeraymond/Documents/My\ Docs/Predictive\ Analytics\ /period_2/predictions_week_7.csv"
+#write.csv(predictions_week_7, file = save_path, row.names = FALSE)
+
+
+Week_7_Predictions_df_new <- read_csv("~/Documents/My Docs/Predictive Analytics /period_2/Week_7_Predictions_df.csv",show_col_types = FALSE)
+Week_7_Predictions_df_new$target <- Week_7_Predictions_df_new$.pred_class
+Week_7_Predictions_df_new$.pred_class <- NULL
+
+Week_7_Predictions_df_new
+
+save_path <- "/Users/joeraymond/Documents/My\ Docs/Predictive\ Analytics\ /period_2/Week_7_Predictions_new_df.csv"
+write.csv(Week_7_Predictions_df_new, file = save_path, row.names = FALSE)
+
+```
+
+#Regression Model to predict the amount the clients will invest.
+
+```{r}
+tb.hist_final_reg <- tb.hist %>% select(-week_id)
+
+# Create categorical variables for age group and marital status with job
+tb.hist_final_reg[["age_group"]] <- cut(tb.hist_final_reg$age, c(0, 35, 45, 65, Inf), 
+                               c("young", "junior", "adult", "senior"), include.lowest=TRUE)
+tb.hist_final_reg[["age_group_job"]] <- paste(tb.hist_final_reg$age_group, tb.hist_final_reg$job)
+tb.hist_final_reg[["marital_job"]] <- paste(tb.hist_final_reg$marital, tb.hist_final_reg$job)
+```
+
+
+```{r}
+
+set.seed(1996)
+data_split_reg <- tb.hist_final_reg %>%
+  initial_split(data = ., prop = 0.8, strata = investment)
+
+# Creating the training and testing splits
+train_data_reg <- training(data_split_reg)
+test_data_reg <- testing(data_split_reg)
+
+# CROSS VALIDATION data split
+train_folds_reg <- vfold_cv(data = train_data_reg, v = 10,
+                        repeats = 1,strata = investment)
+
+```
+
+
+```{r}
+# Define data preparation recipe for continuous variables
+data_prep_recipe_continuous <- recipe(investment ~ ., data = train_data_reg) %>%
+  step_rm(id) %>%
+  step_other(age_group_job, marital_job, threshold = .1, other = "other") %>%
+  step_impute_median(all_numeric(), -all_outcomes()) %>%
+  step_unknown(all_nominal(), -all_outcomes(), new_level = "missing") %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE)  # Specify one_hot = TRUE to avoid contr.dummy error
+  
+# Fit the recipe on training data
+data_prep_trained <- prep(data_prep_recipe_continuous, training = train_data_reg)
+train_data_prep <- bake(data_prep_trained, new_data = train_data_reg)
+test_data_prep <- bake(data_prep_trained, new_data = test_data_reg)
+
+```
+
+
+```{r}
+# Train a linear regression model
+lm_model <- lm(investment ~ ., data = train_data_prep)
+
+# Make predictions on test data
+predictions <- predict(lm_model, newdata = test_data_prep)
+# Evaluate the model
+#summary(lm_model)
+
+```
+
+
+```{r}
+# Preprocess tb.curr data
+tb.curr_processed <- tb.curr %>%
+  mutate(
+    age_group = cut(age, c(0, 35, 45, 65, Inf), c("young", "junior", "adult", "senior"), include.lowest=TRUE),
+    age_group_job = paste(age_group, job),
+    marital_job = paste(marital, job)
+  )
+
+# Apply data preparation recipe to tb.curr
+tb.curr_processed <- bake(data_prep_trained, new_data = tb.curr_processed)
+
+# Make predictions on tb.curr
+tb.curr_predictions <- predict(lm_model, newdata = tb.curr_processed)
+
+# Set negative predictions to 0 and round to the nearest whole number
+rounded_predictions <- round(ifelse(tb.curr_predictions < 0, 0, tb.curr_predictions))
+
+
+```
+
+
+```{r}
+# Create a data frame with id from tb.curr and predicted investment values
+predicted_investment_week7 <- data.frame(id = tb.curr$id, investment = rounded_predictions)
+predicted_investment_week7
+
+save_path <- "~/Documents/My Docs/Predictive Analytics /period_2/predicted_investment_week7.csv"
+write.csv(predicted_investment_week7, file = save_path, row.names = FALSE)
+```
+
+
+
+```{r}
+# Read the Week_7_Predictions_new_df.csv and predicted_investment_week7.csv files
+Week_7_Predictions_df_new <- read.csv("~/Documents/My Docs/Predictive Analytics /period_2/Week_7_Predictions_new_df.csv")
+predicted_investment_week7 <- read.csv("~/Documents/My Docs/Predictive Analytics /period_2/predicted_investment_week7.csv")
+predicted_investment_week7
+Week_7_Predictions_df_new
+
+
+# Merge the data frames on the id column
+merged_data_week7 <- merge(Week_7_Predictions_df_new, predicted_investment_week7, by = "id", all.x = TRUE)
+merged_data_week7$investment <- ifelse(merged_data_week7$target == 0, 0, merged_data_week7$investment)
+merged_data_week7
+# Print the merged data frame
+print(merged_data_week7)
+
+# Save the merged data frame to a new CSV file
+#write.csv(merged_data_week6, file = "merged_data_week6.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+
+#create a data frame with tb.overtime and merged_data_wee6
+
+df_expected_profit <- data.frame(
+    id = tb.curr$id,
+    investment_df = merged_data_week7$investment,
+    pred_yes = curr_pred_prob$.pred_yes)
+df_expected_profit    
+
+#Expected profit calculation.
+expected_profit_df <- df_expected_profit %>% 
+              mutate(expected_profit = pred_yes * (investment_df * 0.04 - 4.5)) %>% filter(investment_df != 0)        
+expected_profit_df
+
+
+totalExpectedProfit <- sum(expected_profit_df$expected_profit)
+
+# Display the total expected profit
+print(totalExpectedProfit)
+
+#clients to traget for the week
+week7prediction_real <- df_expected_profit %>% mutate(target = ifelse(pred_yes > 0.45000000,1,0)) %>% 
+              mutate(expected_profit = pred_yes * (investment_df * 0.04 - 4.5)) %>% select(id,target)
+week7prediction_real
+
+#week7prediction_real %>% filter(target == 1) %>% summarise(n=n())
+
+save_path <- "/Users/joeraymond/Documents/My\ Docs/Predictive\ Analytics\ /period_2/week7prediction_real.csv"
+write.csv(week7prediction_real, file = save_path, row.names = FALSE)
+
+```
+

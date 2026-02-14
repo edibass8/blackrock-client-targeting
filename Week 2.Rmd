@@ -1,0 +1,213 @@
+---
+title: "Period_2_Prediction"
+author: "Edet"
+date: "`r format(Sys.time())`"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    latex_engine: xelatex
+editor_options:
+  chunk_output_type: console
+---
+
+## Preamble
+
+
+Loading the libraries and datasets to be analyzed.
+
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+rm(list=ls())                       # clean the environment
+library(tidyverse)
+library(ggplot2)
+library(tidymodels)
+library(themis)
+```
+
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+# Define file paths
+histfile_0 <- '/Users/edet/Documents/Msc\ school/2nd\ semester/Predictive\ Analytics/Project\ /Question\ and\ Data\ sets/period_0.csv'
+
+histfile_1_data <- '/Users/edet/Documents/Msc\ school/2nd\ semester/Predictive\ Analytics/Project\ /Question\ and\ Data\ sets/period_1_prediction.csv'
+
+histfile_1_res <- '/Users/edet/Documents/Msc\ school/2nd\ semester/Predictive\ Analytics/Project\ /Question\ and\ Data\ sets/results-2024-02-17.csv'
+
+currfile <- '/Users/edet/Documents/Msc\ school/2nd\ semester/Predictive\ Analytics/Project\ /Question\ and\ Data\ sets/period_2_prediction.csv'
+```
+
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+# Load the data
+tb.hist_0 <- read_csv(histfile_0)
+tb.hist_1_data <- read_csv(histfile_1_data)
+tb.hist_1_res <- read_delim(histfile_1_res, delim = ";")
+tb.curr <- read_csv(currfile)
+```
+
+
+```{r,message=FALSE,warning=FALSE, results='hide'}
+# Merge historical data with results data
+tb.hist_1 <- tb.hist_1_data %>%
+  left_join(tb.hist_1_res, by = "id") %>%
+  mutate(
+    investment = ifelse(is.na(investment), 0, investment),
+    week_id = ifelse(is.na(week_id), 1, week_id)
+  )
+
+# Combine historical data from periods 0 and 1
+tb.hist <- tb.hist_0 %>% 
+  select(-call_length) %>%
+  bind_rows(tb.hist_1 %>%
+              select(-week_id))
+
+# Create categorical variables for age group and marital status with job
+tb.hist[["age_group"]] <- cut(tb.hist$age, c(0, 35, 45, 65, Inf), 
+                               c("young", "junior", "adult", "senior"), include.lowest=TRUE)
+tb.hist[["age_group_job"]] <- paste(tb.hist$age_group, tb.hist$job)
+tb.hist[["marital_job"]] <- paste(tb.hist$marital, tb.hist$job)
+
+```
+
+
+
+```{r }
+# Split the data into training and testing sets
+set.seed(1996)
+data_split <- tb.hist %>%
+  mutate( 
+    investment = ifelse(investment == 0, 'no', 'yes'),
+    investment = factor(investment, levels = c('yes', 'no'))
+  ) %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  select(-age_group) %>%
+  initial_split(data = ., prop = 0.8, strata = investment)
+
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+# Define data preparation recipe
+data_prep_recipe <- recipe(investment ~ ., data = train_data) %>%
+  step_rm(id) %>%
+  step_other(age_group_job, marital_job, threshold = .1, other = "other") %>%
+  step_impute_median(all_numeric(), -all_outcomes()) %>%
+  step_unknown(all_nominal(), -all_outcomes(), new_level = "missing") %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_downsample(investment, skip = TRUE, seed = 1996) %>%
+  step_nzv(all_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_scale(all_numeric())
+
+# Fit decision tree regression model
+tree_model <- decision_tree(cost_complexity = 0.005, 
+                             min_n = 2, tree_depth = 12) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+# Setup machine learning workflow
+tree_wf <- workflow() %>%
+  add_model(tree_model) %>% 
+  add_recipe(data_prep_recipe)
+
+# Fit tree to the train data
+tree_fit <- tree_wf %>%
+  fit(data = train_data)
+
+# Predict the test set
+tree_pred_test_class <- predict(tree_fit, new_data = test_data, type = 'class')
+tree_pred_test_score <- predict(tree_fit, new_data = test_data, type = 'prob')
+
+# Get confusion matrix for the 50% threshold
+cm <- test_data %>% 
+  select(investment) %>% 
+  bind_cols(tree_pred_test_class, tree_pred_test_score) %>%
+  conf_mat(truth = investment, estimate = .pred_class)
+
+# Evaluate model performance
+accuracy <- test_data %>% 
+  select(investment) %>% 
+  bind_cols(tree_pred_test_class) %>%
+  yardstick::accuracy(truth = investment, estimate = .pred_class)
+
+sensitivity <- test_data %>% 
+  select(investment) %>% 
+  bind_cols(tree_pred_test_class) %>%
+  yardstick::sens(truth = investment, estimate = .pred_class)
+
+results <- test_data %>% 
+  bind_cols(tree_pred_test_score)
+
+# Plot ROC curve
+roc_curve(results, investment, .pred_yes) %>%
+  autoplot()
+
+# Plot precision-recall curve
+pr_curve(results, investment, .pred_yes) %>%
+  autoplot()
+
+# Plot lift curve
+lift_curve(results, investment, .pred_yes) %>%
+  autoplot()
+
+# Plot gain curve
+gain_curve(results, investment, .pred_yes) %>%
+  autoplot()
+
+
+```
+
+
+``` {r}
+# Prepare current data for prediction
+tb.curr[["age_group"]] <- cut(tb.curr$age, c(0, 35, 45, 65, Inf), 
+                               c("young", "junior", "adult", "senior"), include.lowest=TRUE)
+tb.curr[["age_group_job"]] <- paste(tb.curr$age_group, tb.curr$job)
+tb.curr[["marital_job"]] <- paste(tb.curr$marital, tb.curr$job)
+
+curr_data <- tb.curr %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  select(-age_group)
+
+# Create recipe for current data
+data_prep_recipe <- recipe(~ ., data = curr_data) %>%
+  step_rm(id) %>%
+  step_other(age_group_job, marital_job, threshold = .1, other = "other") %>%
+  step_impute_median(all_numeric(), -all_outcomes()) %>%
+  step_unknown(all_nominal(), -all_outcomes(), new_level = "missing") %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_downsample(investment, skip = TRUE, seed = 1996) %>%
+  step_nzv(all_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_scale(all_numeric())
+
+# Predict using the fitted model
+curr_pred_class <- predict(tree_fit, new_data = curr_data, type = 'class')
+```
+
+
+``` {r}
+curr_pred_prob <- predict(tree_fit, new_data = curr_data, type = 'prob')
+# Create predictions dataframe
+predictions <- data.frame(
+    id = tb.curr$id,
+    target = ifelse(curr_pred_class == "yes", 1, 0)
+)
+```
+
+
+``` {r}
+# Save predictions to file
+save_path <- "really_predictions2.csv"
+write.csv(predictions, file = save_path, row.names = FALSE)
+```
+
+
+``` {r}
+full_path <- file.path(getwd(), save_path)
+cat("CSV file saved to:", full_path, "\n")
+```
+
